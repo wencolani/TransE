@@ -7,6 +7,8 @@ TransE is proposed by Antoine Bordes, Nicolas Usunier and Alberto Garcia-Duran i
 
 The dataset WN18 and FB15k are orginally published by TransE paper and cand be download [here](https://everest.hds.utc.fr/doku.php?id=en:transe)
 
+The data used here are from [here](https://github.com/thunlp/KB2E)
+
 # Train and test
 
 ## Run 
@@ -24,6 +26,10 @@ to change the parameter setting you can use
 --- 'python3 TransE.py --help' 
 
 to see the optional arguments. 
+
+## test
+
+the default setting for testing is testing once with 300 triples after every 10 training iteration
 
 
 
