@@ -9,15 +9,21 @@ The dataset WN18 and FB15k are orginally published by TransE paper and cand be d
 
 # Train and test
 
+## Run 
+
 to run the model with default parameter setting: 
 
 --- 'python3 TransE.py'. 
 
 If you run this code using python2 there will be some error because print setting '\t' is not supported by python2. 
 
+##  change parameter setting
+
 to change the parameter setting you can use 
 
 --- 'python3 TransE.py --help' 
 
 to see the optional arguments. 
+
+
 
