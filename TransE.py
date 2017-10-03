@@ -139,8 +139,8 @@ class TransE:
 					line_list = line.strip().split('\t')
 					assert len(line_list) == 3
 					headid = self.__entity2id[line_list[0]]
-					relationid = self.__relation2id[line_list[1]]
-					tailid = self.__entity2id[line_list[2]]
+					relationid = self.__relation2id[line_list[2]]
+					tailid = self.__entity2id[line_list[1]]
 					triple_list.append((headid, relationid, tailid))
 			return triple_list
 
@@ -267,9 +267,9 @@ def norm_embedding(model,normterm):
 
 def main():
 	parser = argparse.ArgumentParser(description = "TransE")
-	parser.add_argument('--data_dir', dest='data_dir', type=str, help='the directory of dataset', default='../Fb15k_withtext/')
+	parser.add_argument('--data_dir', dest='data_dir', type=str, help='the directory of dataset', default='./data/FB15k/')
 	parser.add_argument('--learning_rate', dest='learning_rate', type=float, help='learning rate', default=0.01)
-	parser.add_argument('--batch_size', dest='batch_size', type=int, help="batch size", default=1024)
+	parser.add_argument('--batch_size', dest='batch_size', type=int, help="batch size", default=2048)
 	parser.add_argument('--max_iter', dest='max_iter', type=int, help='maximum interation', default=100)
 	parser.add_argument('--optimizer', dest='optimizer', type=str, help='optimizer', default='adam')
 	parser.add_argument('--dimension', dest='dimension', type=int, help='embedding dimension', default=100)
