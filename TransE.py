@@ -182,13 +182,16 @@ class TransE:
 
 		triple_positive, triple_negative = inputs # triple_positive:(head_id,realtion_id,tail_id)
 
-		embedding_positive_head = tf.nn.embedding_lookup(embedding_entity, triple_positive[:, 0])
-		embedding_positive_tail = tf.nn.embedding_lookup(embedding_entity, triple_positive[:, 2])
-		embedding_positive_relation = tf.nn.embedding_lookup(embedding_relation, triple_positive[:, 1])
+		norm_entity = tf.nn.l2_normalize(embedding_entity, dim = 1)
+		norm_relation = tf.nn.l2_normalize(embedding_relation, dim = 1)
 
-		embedding_negative_head = tf.nn.embedding_lookup(embedding_entity, triple_negative[:, 0])
-		embedding_negative_tail = tf.nn.embedding_lookup(embedding_entity, triple_negative[:, 2])
-		embedding_negative_relation = tf.nn.embedding_lookup(embedding_relation, triple_negative[:, 1])
+		embedding_positive_head = tf.nn.embedding_lookup(norm_entity, triple_positive[:, 0])
+		embedding_positive_tail = tf.nn.embedding_lookup(norm_entity, triple_positive[:, 2])
+		embedding_positive_relation = tf.nn.embedding_lookup(norm_relation, triple_positive[:, 1])
+
+		embedding_negative_head = tf.nn.embedding_lookup(norm_entity, triple_negative[:, 0])
+		embedding_negative_tail = tf.nn.embedding_lookup(norm_entity, triple_negative[:, 2])
+		embedding_negative_relation = tf.nn.embedding_lookup(norm_relation, triple_negative[:, 1])
 
 		score_positive = tf.reduce_sum(tf.abs(embedding_positive_head + embedding_positive_relation - embedding_positive_tail), axis = 1)
 		score_negative = tf.reduce_sum(tf.abs(embedding_negative_head + embedding_negative_relation - embedding_negative_tail), axis = 1)
@@ -296,9 +299,8 @@ def main():
 	with tf.Session() as session:
 		tf.initialize_all_variables().run()
 
-		#norm_ent = session.run(tf.nn.l2_normalize(model.embedding_entity, dim =1))
+		
 		norm_rel = session.run(tf.nn.l2_normalize(model.embedding_relation, dim =1))
-		#session.run(tf.assign(model.embedding_entity, norm_ent))
 		session.run(tf.assign(model.embedding_relation, norm_rel))
 
 
@@ -352,9 +354,6 @@ def main():
 					rank_tail.append(trank)
 
 				mean_rank_head = np.sum(rank_head, dtype=np.float32)/n_test
-				#print("mean_rank_head")
-				#print(mean_rank_head)
-				#print(len(mean_rank_head))
 				mean_rank_tail = np.sum(rank_tail, dtype=np.float32)/n_test
 				hit10_head = np.sum(np.asarray(np.asarray(rank_head)<10 , dtype=np.float32))/n_test
 				hit10_tail = np.sum(np.asarray(np.asarray(rank_tail)<10 , dtype=np.float32))/n_test
