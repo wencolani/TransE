@@ -7,6 +7,7 @@ import os.path
 import math
 import timeit
 from multiprocessing import JoinableQueue, Queue, Process
+from collections import defaultdict
 
 class TransE:
 	@property
@@ -37,6 +38,14 @@ class TransE:
 	@property
 	def embedding_relation(self):
 		return self.__embedding_relation
+
+	@property
+	def hr_t(self):
+		return self.__hr_t
+
+	@property 
+	def tr_h(self):
+		return self.__tr_h
 
 
 	def training_data_batch(self, batch_size = 512):
@@ -139,11 +148,15 @@ class TransE:
 					line_list = line.strip().split('\t')
 					assert len(line_list) == 3
 					headid = self.__entity2id[line_list[0]]
-					relationid = self.__relation2id[line_list[2]]
-					tailid = self.__entity2id[line_list[1]]
+					relationid = self.__relation2id[line_list[1]]
+					tailid = self.__entity2id[line_list[2]]
 					triple_list.append((headid, relationid, tailid))
+					self.__hr_t[(headid, relationid)].add(tailid)
+					self.__tr_h[(tailid, relationid)].add(headid)
 			return triple_list
 
+		self.__hr_t = defaultdict(set)
+		self.__tr_h = defaultdict(set)
 		self.__triple_train = load_triple(self, 'train.txt')
 		self.__triple_test = load_triple(self, 'test.txt')
 		self.__triple_valid = load_triple(self, 'valid.txt')
@@ -180,10 +193,11 @@ class TransE:
 		embedding_relation = self.__embedding_relation
 		embedding_entity = self.__embedding_entity
 
-		triple_positive, triple_negative = inputs # triple_positive:(head_id,realtion_id,tail_id)
+		triple_positive, triple_negative = inputs # triple_positive:(head_id,relation_id,tail_id)
 
 		norm_entity = tf.nn.l2_normalize(embedding_entity, dim = 1)
 		norm_relation = tf.nn.l2_normalize(embedding_relation, dim = 1)
+		norm_entity_l2sum = tf.sqrt(tf.reduce_sum(norm_entity**2, axis = 1))
 
 		embedding_positive_head = tf.nn.embedding_lookup(norm_entity, triple_positive[:, 0])
 		embedding_positive_tail = tf.nn.embedding_lookup(norm_entity, triple_positive[:, 2])
@@ -199,7 +213,7 @@ class TransE:
 		loss_every = tf.maximum(0., score_positive + self.__margin - score_negative)
 		loss_triple = tf.reduce_sum(tf.maximum(0., score_positive + self.__margin - score_negative))
 		self.__loss_regularizer = loss_regularizer = tf.reduce_sum(tf.abs(self.__embedding_relation)) + tf.reduce_sum(tf.abs(self.__embedding_entity))
-		return loss_triple, loss_every #+ loss_regularizer*self.__regularizer_weight
+		return loss_triple, loss_every, norm_entity_l2sum #+ loss_regularizer*self.__regularizer_weight
 
 
 
@@ -212,11 +226,22 @@ class TransE:
 		rel_vec = tf.nn.embedding_lookup(embedding_relation, triple_test[1])
 		tail_vec = tf.nn.embedding_lookup(embedding_entity, triple_test[2])
 
+		norm_embedding_entity = tf.nn.l2_normalize(embedding_entity, dim =1 )
+		norm_embedding_relation = tf.nn.l2_normalize(embedding_relation, dim = 1)
+		norm_head_vec = tf.nn.embedding_lookup(norm_embedding_entity, triple_test[0])
+		norm_rel_vec = tf.nn.embedding_lookup(norm_embedding_relation, triple_test[1])
+		norm_tail_vec = tf.nn.embedding_lookup(norm_embedding_entity, triple_test[2])
+
+
 		_, id_replace_head = tf.nn.top_k(tf.reduce_sum(tf.abs(embedding_entity + rel_vec - tail_vec), axis=1), k=self.__num_entity)
 		_, id_replace_tail = tf.nn.top_k(tf.reduce_sum(tf.abs(head_vec + rel_vec - embedding_entity), axis=1), k=self.__num_entity)
 
-			
-		return id_replace_head, id_replace_tail
+		_, norm_id_replace_head = tf.nn.top_k(tf.reduce_sum(tf.abs(norm_embedding_entity + norm_rel_vec - norm_tail_vec), axis=1), k=self.__num_entity)
+		_, norm_id_replace_tail = tf.nn.top_k(tf.reduce_sum(tf.abs(norm_head_vec + norm_rel_vec - norm_embedding_entity), axis=1), k=self.__num_entity)
+
+
+		
+		return id_replace_head, id_replace_tail, norm_id_replace_head, norm_id_replace_tail
 
 		
 def train_operation(model, learning_rate=0.01, margin=1.0, optimizer_str = 'gradient'):
@@ -224,7 +249,7 @@ def train_operation(model, learning_rate=0.01, margin=1.0, optimizer_str = 'grad
 		train_triple_positive_input = tf.placeholder(tf.int32, [None, 3])
 		train_triple_negative_input = tf.placeholder(tf.int32, [None, 3])
 
-		loss, loss_every = model.train([train_triple_positive_input, train_triple_negative_input])
+		loss, loss_every, norm_entity = model.train([train_triple_positive_input, train_triple_negative_input])
 		if optimizer_str == 'gradient':
 			optimizer = tf.train.GradientDescentOptimizer(learning_rate = learning_rate)
 		elif optimizer_str == 'rms':
@@ -237,45 +262,25 @@ def train_operation(model, learning_rate=0.01, margin=1.0, optimizer_str = 'grad
 		grads = optimizer.compute_gradients(loss, model.variables)
 		op_train = optimizer.apply_gradients(grads)
 
-		return train_triple_positive_input, train_triple_negative_input, loss, op_train, loss_every
+		return train_triple_positive_input, train_triple_negative_input, loss, op_train, loss_every, norm_entity
 
 def test_operation(model):
 	with tf.device('/cpu'):
 		test_triple = tf.placeholder(tf.int32, [3])
 		print('finish palceholder')
-		head_rank, tail_rank = model.test(test_triple)
+		head_rank, tail_rank, norm_head_rank, norm_tail_rank = model.test(test_triple)
 		print('finish model.test')
-		return test_triple, head_rank, tail_rank
+		return test_triple, head_rank, tail_rank, norm_head_rank, norm_tail_rank
 
-def norm_embedding(model,normterm):
-	embedding_entity = model.embedding_entity
-	embedding_relation = model.embedding_relation 
-	print(embedding_entity)
-
-	def norm(embedding, epsilon=1e-12):
-		if normterm == 'L1':
-			square_sum = np.sum(np.absolute(embedding), axis = 1, keepdims = True)
-		elif normterm == 'L2':
-			square_sum = np.sum(embedding ** 2 , axis = 1, keepdims = True)
-		else:
-			raise NotImplementedError("Dose not support %s norm" %norm)
-
-		embedding_inv = np.sqrt(np.maximum(square_sum, epsilon))
-		return embedding / embedding_inv
-
-	norm_embedding_entity = norm(embedding_entity)
-	norm_embedding_relation = norm(embedding_relation)
-
-	return norm_embedding_entity, norm_embedding_relation
 
 def main():
 	parser = argparse.ArgumentParser(description = "TransE")
-	parser.add_argument('--data_dir', dest='data_dir', type=str, help='the directory of dataset', default='./data/FB15k/')
+	parser.add_argument('--data_dir', dest='data_dir', type=str, help='the directory of dataset', default='../Fb15k_withtext/')
 	parser.add_argument('--learning_rate', dest='learning_rate', type=float, help='learning rate', default=0.01)
-	parser.add_argument('--batch_size', dest='batch_size', type=int, help="batch size", default=2048)
+	parser.add_argument('--batch_size', dest='batch_size', type=int, help="batch size", default=4096)
 	parser.add_argument('--max_iter', dest='max_iter', type=int, help='maximum interation', default=100)
 	parser.add_argument('--optimizer', dest='optimizer', type=str, help='optimizer', default='adam')
-	parser.add_argument('--dimension', dest='dimension', type=int, help='embedding dimension', default=100)
+	parser.add_argument('--dimension', dest='dimension', type=int, help='embedding dimension', default=50)
 	parser.add_argument('--margin', dest='margin', type=float, help='margin', default=1.0)
 	parser.add_argument('--norm', dest='norm', type=str, help='L1 or L2 norm', default='L1')
 	parser.add_argument('--evaluation_size', dest='evaluation_size', type=int, help='batchsize for evaluation', default=500)
@@ -284,6 +289,7 @@ def main():
 	parser.add_argument('--evaluate_per_iteration', dest='evaluate_per_iteration', type=int, help='evaluate the training result per x iteration', default=10)
 	parser.add_argument('--evaluate_worker', dest='evaluate_worker', type=int, help='number of evaluate workers', default=4)
 	parser.add_argument('--regularizer_weight', dest='regularizer_weight', type=float, help='regularization weight', default=1e-5)
+	parser.add_argument('--n_test', dest = 'n_test', type=int, help='number of triples for test during the training', default = 300)
 	args = parser.parse_args()
 	print(args)
 	model = TransE(negative_sampling=args.negative_sampling, data_dir=args.data_dir,
@@ -292,18 +298,17 @@ def main():
 				   dimension=args.dimension, norm=args.norm, evaluation_size=args.evaluation_size, 
 				   regularizer_weight = args.regularizer_weight)
 
-	train_triple_positive_input, train_triple_negative_input, loss, op_train, loss_every = train_operation(model, learning_rate = args.learning_rate, margin = args.margin, optimizer_str = args.optimizer)
-	test_triple, head_rank, tail_rank = test_operation(model)
+	train_triple_positive_input, train_triple_negative_input, loss, op_train, loss_every, norm_entity = train_operation(model, learning_rate = args.learning_rate, margin = args.margin, optimizer_str = args.optimizer)
+	test_triple, head_rank, tail_rank , norm_head_rank, norm_tail_rank= test_operation(model)
 
 
 	with tf.Session() as session:
 		tf.initialize_all_variables().run()
 
-		
 		norm_rel = session.run(tf.nn.l2_normalize(model.embedding_relation, dim =1))
 		session.run(tf.assign(model.embedding_relation, norm_rel))
-
-
+		norm_ent = session.run(tf.nn.l2_normalize(model.embedding_entity, dim =1))
+		session.run(tf.assign(model.embedding_entity, norm_ent))
 
 		for n_iter in range(args.max_iter):
 			accu_loss =0.
@@ -313,51 +318,121 @@ def main():
 			prepare_time = 0.
 			
 			for tp, tn , t in  model.training_data_batch(batch_size= args.batch_size):
-				l, _, l_every = session.run([loss, op_train, loss_every], {train_triple_positive_input:tp, train_triple_negative_input: tn})
+				l, _, l_every, norm_e = session.run([loss, op_train, loss_every, norm_entity], {train_triple_positive_input:tp, train_triple_negative_input: tn})
 				accu_loss += l
 				batch += 1
-				#print(l_every)
 				print('[%.2f sec](%d/%d): -- loss: %.5f' %(timeit.default_timer()-start_time, batch, num_batch , l), end='\r')
 				prepare_time += t
-				#norm_ent = session.run(tf.nn.l2_normalize(model.embedding_entity, dim =1))
-				#norm_rel = session.run(tf.nn.l2_normalize(model.embedding_relation, dim =1))
-				#session.run(tf.assign(model.embedding_entity, norm_ent))
-				#session.run(tf.assign(model.embedding_relation, norm_rel))
 			print('iter[%d] ---loss: %.5f ---time: %.2f ---prepare time : %.2f' %(n_iter, accu_loss, timeit.default_timer()-start_time, prepare_time))
-
 			
-			if n_iter %args.evaluate_per_iteration == 0 or n_iter ==0:
+			if n_iter %args.evaluate_per_iteration == 0 or n_iter ==0 or n_iter == args.max_iter-1:
+				#print("[iter %d] after l2 normalization the entity vectors: %s"%(n_iter, str(norm_e[:10])))
+				#print("[iter %d] after training the entity vectors: %s"%(n_iter, str(session.run(tf.sqrt(tf.reduce_sum(model.embedding_entity**2, axis = 1))[:10]))))
+
 				rank_head = []
 				rank_tail = []
+				filter_rank_head = []
+				filter_rank_tail = []
+
+				norm_rank_head = []
+				norm_rank_tail = []
+				norm_filter_rank_head = []
+				norm_filter_rank_tail = []
+
 				start = timeit.default_timer()
 				testing_data = model.testing_data
-				n_test = 300
+				hr_t = model.hr_t
+				tr_h = model.tr_h
+				n_test = args.n_test
+				if n_iter == args.max_iter-1:	n_test = model.num_triple_test
 				for i in range(n_test):
 					print('[%.2f sec] --- testing[%d/%d]' %(timeit.default_timer()-start, i+1, n_test), end='\r')
 					t = testing_data[i]
-					id_replace_head , id_replace_tail = session.run([head_rank, tail_rank], {test_triple:t})
-					hrank = model.num_entity-1
-					for val in id_replace_head:
+					id_replace_head , id_replace_tail, norm_id_replace_head , norm_id_replace_tail  = session.run([head_rank, tail_rank, norm_head_rank, norm_tail_rank], {test_triple:t})
+					hrank = 0
+					fhrank = 0
+					for i in range(len(id_replace_head)):
+						val = id_replace_head[-i-1]
 						if val == t[0]:
-							break
+							break						
 						else: 
-							hrank -= 1
+							hrank += 1
+							fhrank += 1 
+							if val in tr_h[(t[2],t[1])]:
+								fhrank -= 1
 
-					trank = model.num_entity-1
-					for val in id_replace_tail:
+					norm_hrank = 0
+					norm_fhrank = 0
+					for i in range(len(norm_id_replace_head)):
+						val = norm_id_replace_head[-i-1]
+						if val == t[0]:
+							break						
+						else: 
+							norm_hrank += 1
+							norm_fhrank += 1 
+							if val in tr_h[(t[2],t[1])]:
+								norm_fhrank -= 1
+									
+
+					trank = 0
+					ftrank = 0
+					for i in range(len(id_replace_tail)):
+						val = id_replace_tail[-i-1]
 						if val == t[2]:
 							break
 						else:
-							trank -= 1
+							trank += 1
+							ftrank += 1
+							if val in hr_t[(t[0], t[1])]:
+								ftrank -= 1
+
+					norm_trank = 0
+					norm_ftrank = 0
+					for i in range(len(norm_id_replace_tail)):
+						val = norm_id_replace_tail[-i-1]
+						if val == t[2]:
+							break
+						else:
+							norm_trank += 1
+							norm_ftrank += 1
+							if val in hr_t[(t[0], t[1])]:
+								norm_ftrank -= 1
 
 					rank_head.append(hrank)
 					rank_tail.append(trank)
+					filter_rank_head.append(fhrank)
+					filter_rank_tail.append(ftrank)
+
+					norm_rank_head.append(norm_hrank)
+					norm_rank_tail.append(norm_trank)
+					norm_filter_rank_head.append(norm_fhrank)
+					norm_filter_rank_tail.append(norm_ftrank)
 
 				mean_rank_head = np.sum(rank_head, dtype=np.float32)/n_test
 				mean_rank_tail = np.sum(rank_tail, dtype=np.float32)/n_test
+				filter_mean_rank_head = np.sum(filter_rank_head, dtype=np.float32)/n_test
+				filter_mean_rank_tail = np.sum(filter_rank_tail, dtype=np.float32)/n_test
+
+				norm_mean_rank_head = np.sum(norm_rank_head, dtype=np.float32)/n_test
+				norm_mean_rank_tail = np.sum(norm_rank_tail, dtype=np.float32)/n_test
+				norm_filter_mean_rank_head = np.sum(norm_filter_rank_head, dtype=np.float32)/n_test
+				norm_filter_mean_rank_tail = np.sum(norm_filter_rank_tail, dtype=np.float32)/n_test
+
 				hit10_head = np.sum(np.asarray(np.asarray(rank_head)<10 , dtype=np.float32))/n_test
 				hit10_tail = np.sum(np.asarray(np.asarray(rank_tail)<10 , dtype=np.float32))/n_test
+				filter_hit10_head = np.sum(np.asarray(np.asarray(filter_rank_head)<10 , dtype=np.float32))/n_test
+				filter_hit10_tail = np.sum(np.asarray(np.asarray(filter_rank_tail)<10 , dtype=np.float32))/n_test
+
+				norm_hit10_head = np.sum(np.asarray(np.asarray(norm_rank_head)<10 , dtype=np.float32))/n_test
+				norm_hit10_tail = np.sum(np.asarray(np.asarray(norm_rank_tail)<10 , dtype=np.float32))/n_test
+				norm_filter_hit10_head = np.sum(np.asarray(np.asarray(norm_filter_rank_head)<10 , dtype=np.float32))/n_test
+				norm_filter_hit10_tail = np.sum(np.asarray(np.asarray(norm_filter_rank_tail)<10 , dtype=np.float32))/n_test
+
 				print('iter:%d --mean rank: %.2f --hit@10: %.2f' %(n_iter, (mean_rank_head+ mean_rank_tail)/2, (hit10_tail+hit10_head)/2))
+				print('iter:%d --filter mean rank: %.2f --filter hit@10: %.2f' %(n_iter, (filter_mean_rank_head+ filter_mean_rank_tail)/2, (filter_hit10_tail+filter_hit10_head)/2))
+
+				print('iter:%d --norm mean rank: %.2f --norm hit@10: %.2f' %(n_iter, (norm_mean_rank_head+ norm_mean_rank_tail)/2, (norm_hit10_tail+norm_hit10_head)/2))
+				print('iter:%d --norm filter mean rank: %.2f --norm filter hit@10: %.2f' %(n_iter, (norm_filter_mean_rank_head+ norm_filter_mean_rank_tail)/2, (norm_filter_hit10_tail+norm_filter_hit10_head)/2))
 			
 
 if __name__ =="__main__":
